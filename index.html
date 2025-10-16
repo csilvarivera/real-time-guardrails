@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Safety Guardrails</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+        .blinking-cursor {
+            display: inline-block;
+            width: 8px;
+            height: 1rem;
+            background-color: #333;
+            animation: blink 1s step-start infinite;
+        }
+        @keyframes blink {
+            50% { opacity: 0; }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center h-screen font-sans">
+    <div class="w-full max-w-2xl h-full flex flex-col bg-white shadow-lg rounded-lg">
+        <div class="p-4 border-b border-gray-200">
+            <h1 class="text-2xl font-bold text-gray-800">Real-time Safety Guardrails</h1>
+            <p class="text-sm text-gray-500">An example of real-time content safety moderation with Gemini</p>
+        </div>
+        <div id="chat-container" class="flex-1 p-4 overflow-y-auto">
+            <!-- Chat messages will be appended here -->
+        </div>
+        <div id="loading-indicator" class="p-4 hidden">
+            <div class="flex items-center">
+                <div class="text-gray-500">AI is typing</div>
+                <div class="blinking-cursor ml-2"></div>
+            </div>
+        </div>
+        <div class="p-4 border-t border-gray-200">
+            <div class="flex">
+                <input type="text" id="user-input" class="flex-1 p-2 border border-gray-300 rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
+                <button id="send-btn" class="px-4 py-2 bg-blue-500 text-white rounded-r-lg hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const userInput = document.getElementById('user-input');
+        const sendBtn = document.getElementById('send-btn');
+        const loadingIndicator = document.getElementById('loading-indicator');
+
+        const addMessage = (sender, text, isUser = false) => {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', 'mb-4', 'flex', isUser ? 'justify-end' : 'justify-start');
+            
+            const bubble = document.createElement('div');
+            bubble.classList.add('p-3', 'rounded-lg', 'max-w-lg');
+
+            if (isUser) {
+                bubble.classList.add('bg-blue-500', 'text-white');
+            } else {
+                bubble.classList.add('bg-gray-200', 'text-gray-800');
+            }
+            
+            bubble.textContent = text;
+            
+            messageElement.appendChild(bubble);
+            chatContainer.appendChild(messageElement);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            return bubble;
+        };
+
+        const handleSendMessage = () => {
+            const prompt = userInput.value.trim();
+            if (!prompt) return;
+
+            addMessage('User', prompt, true);
+            userInput.value = '';
+            loadingIndicator.classList.remove('hidden');
+
+            streamResponseFromBackend(prompt);
+        };
+
+        const streamResponseFromBackend = async (prompt) => {
+            let aiMessageBubble = addMessage('AI', '');
+            let fullResponse = '';
+            loadingIndicator.classList.remove('hidden');
+
+            try {
+                const response = await fetch('http://127.0.0.1:5001/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ prompt }),
+                });
+
+                if (!response.body) return;
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    
+                    buffer = lines.pop(); 
+
+                    for (const line of lines) {
+                        if (line.startsWith('data:')) {
+                            try {
+                                const data = JSON.parse(line.substring(5));
+                                if (data.text === '[STOP]') {
+                                    fullResponse += '\n\n[Content Moderated]';
+                                    aiMessageBubble.textContent = fullResponse;
+                                    return;
+                                }
+                                fullResponse += data.text;
+                                aiMessageBubble.textContent = fullResponse;
+                                chatContainer.scrollTop = chatContainer.scrollHeight;
+                            } catch (e) {
+                                console.error('Failed to parse JSON from line:', line, e);
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error('Error streaming response:', error);
+                aiMessageBubble.textContent = 'Error: Could not connect to the server.';
+            } finally {
+                loadingIndicator.classList.add('hidden');
+            }
+        };
+
+        sendBtn.addEventListener('click', handleSendMessage);
+        userInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                handleSendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
